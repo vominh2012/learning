@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "sudoku.cpp"
-#include "common.h"
+#include "base.h"
 #include "raylib.h"
 #include "raymath.h"
 
@@ -31,7 +31,6 @@ void sudoku_solve_from_file(char *fname, SudokuGame *sudoku_games)
 {
     FILE *f = fopen(fname, "rb");
     if(f) {
-        dll_init(sudoku_games);
         
         fseek(f, 0, SEEK_END);
         u32 file_size = ftell(f);
@@ -86,11 +85,8 @@ void sudoku_solve_from_file(char *fname, SudokuGame *sudoku_games)
             }
             
             u32 bcount = 0;
-            //bool ret = sudoku_backtrack(sudoku, 0, 9, 9, 3, &bcount);
-            //advance_sudoku(sudoku, 9, max_size, padding);
             u32 num_guess = 0;
             u32 block_size = 3;
-            
             
             memcpy(sudoku_solution, sudoku, max_size);
             
@@ -140,28 +136,15 @@ void sudoku_solve_from_file(char *fname, SudokuGame *sudoku_games)
     
 }
 
-typedef enum GameState
-{
-	PLAYING,
-	LOSE,
-	WIN
-} GameState;
-
-GameState state;
-
 float timeGameStarted;
 float timeGameEnded;
-
 
 void CellDraw(Vector2 p, int r, int c, u8 val, u16 candidates, u16 hidden_single, u16 hidden_pair)
 {
     Font font = GetFontDefault();
-    int x = (int)p.x;
-    int y = (int)p.y;
     
-    int recx = x  + r * cellWidth;
-    int recy = y + c * cellHeight;
-    DrawRectangleLines(recx, recy, cellWidth, cellHeight, BLACK);
+    float recx = p.x  + r * cellWidth;
+    float recy = p.y + c * cellHeight;
     
     if (!candidates)
     {
@@ -179,9 +162,8 @@ void CellDraw(Vector2 p, int r, int c, u8 val, u16 candidates, u16 hidden_single
             for (int j = 0; j < BLOCK_SIZE; ++j)
         {
             {
-                int sub_recx = recx + j * cellWidth / BLOCK_SIZE;
-                int sub_recy = recy + i * cellHeight / BLOCK_SIZE;
-                //4DrawRectangleLines(sub_recx, sub_recy, cellWidth / BLOCK_SIZE, cellHeight / BLOCK_SIZE, BLACK);
+                float sub_recx = recx + j * cellWidth / BLOCK_SIZE;
+                float sub_recy = recy + i * cellHeight / BLOCK_SIZE;
                 Color text_color = DARKGRAY;
                 u16 bits = (1 << val);
                 if (hidden_pair & bits)
@@ -205,16 +187,65 @@ void CellDraw(Vector2 p, int r, int c, u8 val, u16 candidates, u16 hidden_single
     }
 }
 
+void draw_rect(Rectangle rec, float thick, Color c)
+{
+    DrawLineEx({rec.x, rec.y}, {rec.x + rec.width, rec.y}, thick, c);
+    DrawLineEx({rec.x, rec.y}, {rec.x, rec.y + rec.height}, thick, c);
+    DrawLineEx({rec.x + rec.width, rec.y}, {rec.x + rec.width, rec.y + rec.height}, thick, c);
+    DrawLineEx({rec.x, rec.y + rec.height}, {rec.x + rec.width, rec.y + rec.height}, thick, c);
+}
+
+void draw_grid(Rectangle first_cell, int num_row, int num_col, float thick, Color c) {
+    for (int i = 0; i < num_col; ++i)
+    {
+        for (int j = 0; j < num_row; ++j)
+        {
+            Vector2 a = {first_cell.x + first_cell.width  * i, first_cell.y + first_cell.height * j};
+            Rectangle rec = {a.x, a.y, first_cell.width, first_cell.height};
+            draw_rect(rec, thick, c);
+        }
+    }
+}
+
+void draw_board_grid(Vector2 pos)
+{
+    Rectangle cell_rec = {pos.x, pos.y, cellWidth, cellHeight};
+    draw_grid(cell_rec, ROWS, COLS, 1, GRAY);
+    
+    Rectangle block_rec = {pos.x, pos.y, BLOCK_SIZE * cellWidth, BLOCK_SIZE *cellHeight};
+    draw_grid(block_rec, BLOCK_SIZE, BLOCK_SIZE, 2, BLACK);
+    
+}
+
+void draw_board(Vector2 pos,u8* sudoku, u16 *candidates, u16 *hidden_pair, u16* hidden_single)
+{
+    draw_board_grid(pos);
+    
+    bool draw_hint = candidates && hidden_pair && hidden_single;
+    for (int i = 0; i < COLS; i++)
+    {
+        for (int j = 0; j < ROWS; j++)
+        {
+            int index = ROWS * j + i;
+            if (draw_hint)
+                CellDraw(pos, i, j, sudoku[index], candidates[index], hidden_single[index], hidden_pair[index]);
+            else
+                CellDraw(pos, i, j, sudoku[index], 0, 0, 0);
+        }
+    }
+    
+}
 int main()
 {
 	srand(time(0));
     
-	InitWindow(screenWidth, screenHeight, "Raylib Sudoku");
+    int padding = 10;
+	InitWindow(screenWidth + padding, screenHeight + padding, "Sudoku Solver");
     
-    state = PLAYING;
     timeGameStarted = GetTime();
 	
     SudokuGame games = {};
+    dll_init(&games);
     sudoku_solve_from_file("data/puzzles2_17_clue", &games);
     SudokuGame *game = games.next;
     
@@ -257,31 +288,23 @@ int main()
         
         DrawText(TextFormat("Num guess: %d", game->num_guess), 5, 15, 10, DARKGRAY);
         
+        // draw game
+        
         float x = screenWidth / 2 - cellWidth * COLS / 2;
-        Vector2 board1_pos = {x, 0.0};
-        for (int i = 0; i < COLS; i++)
-        {
-            for (int j = 0; j < ROWS; j++)
-            {
-                int index = ROWS * j + i;
-                u16 *candidates = game->candidates;
-                u16 *hidden_pair = game->candidates + BOARD_SIZE;
-                u16 *hidden_single = game->candidates + BOARD_SIZE * 2;
-                CellDraw(board1_pos, i, j, game->sudoku[index], candidates[index], hidden_single[index], hidden_pair[index]);
-            }
-        }
+        float y = 10.0f;
+        Vector2 board1_pos = {x, y};
         
-        Vector2 board2_pos = {x, screenHeight / 2};
-        for (int i = 0; i < COLS; i++)
-        {
-            for (int j = 0; j < ROWS; j++)
-            {
-                int index = ROWS * j + i;
-                CellDraw(board2_pos, i, j, game->sudoku_solution[index], 0, 0, 0);
-            }
-        }
+        // draw challenge
+        u16 *candidates = game->candidates;
+        u16 *hidden_pair = game->candidates + BOARD_SIZE;
+        u16 *hidden_single = game->candidates + BOARD_SIZE * 2;
+        draw_board(board1_pos, game->sudoku, candidates, hidden_single, hidden_pair);
         
-		EndDrawing();
+        // draw solution
+        Vector2 board2_pos = {x, y + screenHeight / 2};
+        draw_board(board2_pos, game->sudoku_solution, 0, 0, 0);
+		
+        EndDrawing();
 	}
 	
 	CloseWindow();
