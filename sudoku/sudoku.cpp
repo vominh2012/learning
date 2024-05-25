@@ -238,6 +238,66 @@ void print_candidates(u16 candidates)
     printf("\n");
 }
 
+bool sudoku_reduce_possible(u8 *sudoku, u16* sudoku_possible, int index, int val, int max_row, int max_col, int block_size)
+{
+    int max_size = max_row * max_col;
+    
+    // validate row
+    int row = index / max_col;
+    int start_row = row * max_col;
+    int end_row = start_row +  max_col;
+    
+    sudoku_possible[index] = 0;
+    
+    u16 possible = 1 << val;
+    
+    
+    for(int i = start_row; i < end_row; ++i)
+    {
+        if (sudoku_possible[i] & possible) {
+            sudoku_possible[i] ^= possible;
+            
+            if (!sudoku_possible[i]) // zero possible mean we pick wrong number
+                return false;
+        }
+    }
+    
+    // validate col
+    int col = index % max_row;
+    for(int i = 0; i < max_row; ++i)
+    {
+        int col_index = i * max_row + col;
+        if (sudoku_possible[col_index] & possible) {
+            sudoku_possible[col_index] ^= possible;
+            
+            if (!sudoku_possible[col_index]) // zero possible mean we pick wrong number
+                return false;
+        }
+    }
+    
+    // validate block
+    int start_block_col = col / block_size * block_size;
+    int start_block_row = row / block_size * block_size;
+    int start_block_index = start_block_row * max_col + start_block_col;
+    for (int i = 0; i < block_size; ++i)
+    {
+        for(int j = 0; j < block_size; ++j)
+        {
+            const int block_index = start_block_index +  i * max_col + j;
+            if (sudoku_possible[block_index] & possible) {
+                sudoku_possible[block_index] ^= possible;
+                
+                if (!sudoku_possible[block_index]) // zero possible mean we pick wrong number
+                    return false;
+            }
+        }
+    }
+    
+    
+    
+    return true;
+}
+
 void sudoku_fill_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max_col, int block_size)
 {
     int max_size = max_row * max_col;
@@ -259,7 +319,9 @@ void sudoku_fill_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max
     u16 *hidden_pair = sudoku_possible + max_size;
     u16 *hidden_single = sudoku_possible + max_size * 2;
     
-#if 1
+    int delta = 0;
+    
+#if 0
     // row
     for (int row = 0; row < max_row; ++row)
     {
@@ -334,7 +396,7 @@ void sudoku_fill_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max
     }
     
     // block
-    int delta = 0;
+    delta = 0;
     for (int b = 0; b < 9; ++b)
     {
         int start_block_index = b * block_size + delta * max_col;
@@ -384,6 +446,7 @@ void sudoku_fill_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max
     
 #endif
     
+#if 0
     // row
     for (int row = 0; row < max_row; ++row)
     {
@@ -474,7 +537,7 @@ void sudoku_fill_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max
             }
         }
     }
-    
+#endif
 }
 
 void sudoku_update_possible(u8 *sudoku, u16* sudoku_possible, int max_row, int max_col, int block_size)
@@ -596,13 +659,33 @@ bool sudoku_backtrack_with_possible(u8 *sudoku_ret, u16 *sudoku_possible, int in
     return true;
 }
 
-bool sudoku_backtrack_heuristic(u8 *sudoku, u16 *sudoku_possible, u8 max_row, u8 max_col, u8 block_size, u32 *num_guess)
+int find_possible_min_from_table(u8 *sudoku, u16 *possible, u32 max_size)
+{
+    
+    u32 min_index = max_size;
+    u32 min_count = max_size;
+    
+    for(u32 i = 0; i < max_size; ++i)
+    {
+        if (sudoku[i] == 0) {
+            u32 count = count_set_bits(possible[i]);
+            if (count < min_count) {
+                min_index = i;
+                min_count = count;
+            }
+        }
+    }
+    
+    return min_index;
+}
+
+typedef void (*debug_callback)(void *context, u8 *sudoku, u16 *sudoku_possible, u32 index, u32 val);
+
+bool sudoku_backtrack_heuristic(u8 *sudoku, u16 *sudoku_possible, u8 max_row, u8 max_col, u8 block_size, u32 *num_guess, debug_callback db_callback = 0, void *debug_context = 0)
 {
     u32 max_size = max_row * max_col;
     
-    //for(u32 i = 0 ; i < max_size; ++i)
-    //if (!sudoku[i])
-    u32 i = find_possible_min(sudoku, max_row, max_col, block_size);
+    u32 i = find_possible_min_from_table(sudoku, sudoku_possible, max_size);
     if (i < max_size)
     {
         u16 possible_data = sudoku_possible[i];
@@ -615,11 +698,23 @@ bool sudoku_backtrack_heuristic(u8 *sudoku, u16 *sudoku_possible, u8 max_row, u8
                 if (valid(sudoku, val, i, max_row, max_col, block_size)) {
                     if (num_guess) ++*num_guess;
                     sudoku[i] = val;
-                    if (sudoku_backtrack_heuristic(sudoku, sudoku_possible, max_row, max_col, block_size, num_guess))
+                    
+                    
+                    u32 size = sizeof(u16) * max_size * 3;
+                    u16 *new_possible = (u16*)malloc(size);
+                    memcpy(new_possible, sudoku_possible, size); 
+                    bool valid_pick = (sudoku_reduce_possible(sudoku, new_possible, i, val, max_row, max_col, block_size));
+                    
+                    if (db_callback) {
+                        db_callback(debug_context, sudoku, new_possible, i, val);
+                    }
+                    if (valid_pick && sudoku_backtrack_heuristic(sudoku, new_possible, max_row, max_col, block_size, num_guess, db_callback, debug_context))
                     {
+                        free(new_possible);
                         return true;
                     }
                     else {
+                        free(new_possible);
                         sudoku[i] = 0;
                     }
                 }
@@ -890,7 +985,7 @@ void solve_data_file(char *fname)
             //assert(ret == true);
             
             solved_count++;
-            if (solved_count > 15) 
+            if (solved_count >30) 
                 break;
             
             memset(sudoku_possible, 0, max_size * sizeof(u16));
